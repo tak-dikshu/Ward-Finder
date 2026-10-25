@@ -1,0 +1,105 @@
+name: Unpack Ward Finder update
+
+# Manual only. Unpacks ward-finder-updated.zip (already in this repo) onto a NEW branch.
+# It never changes your main branch.
+on:
+  workflow_dispatch:
+    inputs:
+      zip_path:
+        description: Path of the ZIP inside the repo (leave as is)
+        default: ward-finder-updated.zip
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Unpack, check, and push to a new branch
+        env:
+          ZIP_PATH: ${{ inputs.zip_path }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          # 1. Find the ZIP (input path first, otherwise search the repo)
+          ZIP="${ZIP_PATH:-}"
+          if [ -n "$ZIP" ] && { case "$ZIP" in *..*) true ;; *) false ;; esac || ! printf '%s' "$ZIP" | grep -Eq '^[A-Za-z0-9._/ ()-]+\.zip$'; }; then
+            echo "::error::Invalid zip path"; exit 1
+          fi
+          if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
+            ZIP=$(find . -type f -iname 'ward-finder-updated*.zip' -not -path './.git/*' | head -1 || true)
+          fi
+          if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
+            echo "::error::Could not find ward-finder-updated.zip in this repository"; exit 1
+          fi
+          echo "Using ZIP: $ZIP ($(stat -c %s "$ZIP") bytes)"
+
+          # 2. Extract to a temp folder and find the real Next.js project root
+          WORK=$(mktemp -d)
+          unzip -q "$ZIP" -d "$WORK/x"
+          ROOT=""
+          while IFS= read -r pj; do
+            d=$(dirname "$pj")
+            if grep -q '"next"' "$pj" && [ -d "$d/app" ]; then ROOT="$d"; break; fi
+          done < <(find "$WORK/x" -maxdepth 3 -name package.json -not -path '*/node_modules/*' | sort)
+          if [ -z "$ROOT" ]; then echo "::error::No Next.js project (package.json + app/) found inside the ZIP"; exit 1; fi
+          echo "Project root inside ZIP: ${ROOT#"$WORK"/x/}"
+
+          # 3. Safety: refuse env files and anything that looks like a key
+          if find "$ROOT" \( -name '.env' -o -name '.env.*' \) ! -name '.env.example' -print | grep -q .; then
+            echo "::error::The ZIP contains an .env file. Refusing to continue."; exit 1
+          fi
+          if grep -rIlE 'sb_secret_|eyJhbGciOi[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.' "$ROOT" --exclude-dir=node_modules --exclude=pnpm-lock.yaml | grep -q .; then
+            echo "::error::The ZIP contains something that looks like a Supabase key. Refusing to continue."; exit 1
+          fi
+
+          # 4. Conflict report against the files already in the repo
+          NEW=0; SAME=0; CHANGED=()
+          while IFS= read -r -d '' f; do
+            rel="${f#"$ROOT"/}"
+            if [ ! -e "$rel" ]; then NEW=$((NEW+1))
+            elif cmp -s "$f" "$rel"; then SAME=$((SAME+1))
+            else CHANGED+=("$rel"); fi
+          done < <(find "$ROOT" -type f -not -path '*/node_modules/*' -print0)
+          KEPT=0
+          while IFS= read -r f; do
+            case "$f" in .github/*|*.zip) continue ;; esac
+            [ -e "$ROOT/$f" ] || KEPT=$((KEPT+1))
+          done < <(git ls-files)
+          LOCKS=$(ls package-lock.json yarn.lock bun.lock bun.lockb 2>/dev/null | tr '\n' ' ' || true)
+
+          # 5. Write everything to a NEW branch (main is never touched)
+          BRANCH="ward-finder-update-${GITHUB_RUN_NUMBER:-0}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b "$BRANCH"
+          cp -a "$ROOT"/. .
+          [ -f .gitignore ] || : > .gitignore
+          [ -z "$(tail -c1 .gitignore)" ] || echo >> .gitignore
+          for line in '.env' '.env.*' '!.env.example' '*.tsbuildinfo'; do
+            grep -qxF -- "$line" .gitignore || echo "$line" >> .gitignore
+          done
+          git add -A
+          if git diff --cached --name-only | grep -E '(^|/)\.env($|\.)' | grep -qv '\.env\.example$'; then
+            echo "::error::An .env file was about to be committed. Aborting."; exit 1
+          fi
+          if git diff --cached --quiet; then echo "Nothing to commit: the repository already matches the ZIP."; exit 0; fi
+          git commit -q -m "Add Ward Finder admin PDF import (unpacked from ${ZIP##*/})"
+          git push -q origin "$BRANCH"
+
+          # 6. Report
+          {
+            echo "## Ward Finder unpack finished"
+            echo "- New branch: \`$BRANCH\` (main was not changed)"
+            echo "- New files: $NEW, identical: $SAME, will change on the branch: ${#CHANGED[@]}"
+            echo "- Files already in the repo that are not in the ZIP (kept): $KEPT"
+            [ -z "$LOCKS" ] || echo "- WARNING: other lockfiles exist at the repo root: $LOCKS (delete them, keep pnpm-lock.yaml)"
+            echo "- Compare / open pull request: ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-OWNER/REPO}/compare/${DEFAULT_BRANCH:-main}...$BRANCH"
+            if [ ${#CHANGED[@]} -gt 0 ]; then echo; echo "### Existing files that differ (replaced on the branch only)"; printf -- '- %s\n' "${CHANGED[@]:0:200}"; fi
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          
