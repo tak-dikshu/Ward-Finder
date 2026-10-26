@@ -22,6 +22,7 @@ export function WardFinder() {
   const [currentPage, setCurrentPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [isSampleMode, setIsSampleMode] = useState(false)
   const [state, setState] = useState<SearchState>('idle')
   const [error, setError] = useState('')
   const requestId = useRef(0)
@@ -56,12 +57,15 @@ export function WardFinder() {
         })
         window.clearTimeout(timeoutId)
         if (!response.ok) throw new Error('Search unavailable')
-        const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean }
+        const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean; sample?: boolean }
         if (id !== requestId.current) return
         const nextResults = data.results ?? []
         setResults(nextResults)
         setTotalCount(typeof data.total === 'number' ? data.total : nextResults.length)
         setHasMore(Boolean(data.hasMore))
+        if (typeof data.sample === 'boolean') {
+          setIsSampleMode(data.sample)
+        }
         setState(nextResults.length ? 'success' : 'empty')
       } catch (err: unknown) {
         if (id !== requestId.current) return
@@ -88,7 +92,7 @@ export function WardFinder() {
         { cache: 'no-store' }
       )
       if (!response.ok) throw new Error('Failed to load more results')
-      const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean }
+      const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean; sample?: boolean }
       const newItems = data.results ?? []
       setResults((prev) => [...prev, ...newItems])
       setCurrentPage(nextPage)
@@ -96,8 +100,11 @@ export function WardFinder() {
       if (typeof data.total === 'number') {
         setTotalCount(data.total)
       }
+      if (typeof data.sample === 'boolean') {
+        setIsSampleMode(data.sample)
+      }
     } catch {
-      // Keep existing results intact if load more encounters a glitch
+      // Keep existing results intact if load more encounters a temporary network glitch
     } finally {
       setLoadingMore(false)
     }
@@ -109,6 +116,7 @@ export function WardFinder() {
     setTotalCount(null)
     setCurrentPage(1)
     setHasMore(false)
+    setIsSampleMode(false)
     setState('idle')
     setError('')
   }
@@ -288,9 +296,9 @@ export function WardFinder() {
                       ) : (
                         <>
                           <span>Load Next Results</span>
-                          {totalCount !== null && (
+                          {totalCount !== null && totalCount > results.length && (
                             <span className="rounded-full bg-[#eef2ec] px-2 py-0.5 text-xs font-bold text-[#40523e]">
-                              +{Math.min(25, totalCount - results.length)} remaining
+                              +{totalCount - results.length} remaining
                             </span>
                           )}
                         </>
@@ -302,7 +310,7 @@ export function WardFinder() {
                   </div>
                 )}
 
-                {!hasMore && results.length > 25 && (
+                {!hasMore && results.length > 20 && (
                   <div className="mt-5 text-center text-xs font-medium text-[#85918a]">
                     All {results.length} matching records loaded
                   </div>
@@ -314,9 +322,9 @@ export function WardFinder() {
 
         <footer className="flex flex-col gap-2 border-t border-[#e0e6de] pt-5 text-xs leading-5 text-[#89958d] sm:flex-row sm:items-center sm:justify-between">
           <p>Results are limited to name, relative name, serial number, and ward number.</p>
-          <p>Sample mode uses fictional records only.</p>
+          {isSampleMode && <p>Sample mode uses fictional records only.</p>}
         </footer>
       </div>
     </main>
   )
-}
+      }
