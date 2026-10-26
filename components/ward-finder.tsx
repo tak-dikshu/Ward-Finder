@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowRight, CheckCircle2, CircleHelp, Filter, Loader2, Search, ShieldCheck, X } from 'lucide-react'
-import { PWAInstallButton } from './pwa-install-button'
 
 type Result = {
   id: string
@@ -98,7 +97,7 @@ export function WardFinder() {
         setTotalCount(data.total)
       }
     } catch {
-      // Keep existing results intact if network drops temporarily
+      // Keep existing results intact if load more encounters a glitch
     } finally {
       setLoadingMore(false)
     }
@@ -135,8 +134,7 @@ export function WardFinder() {
             <span className="text-sm font-bold tracking-[-0.02em]">Ward Finder</span>
           </div>
           <div className="flex items-center gap-3">
-            <PWAInstallButton />
-            <div className="hidden items-center gap-2 text-xs font-medium text-[#6c7b74] sm:flex">
+            <div className="flex items-center gap-2 text-xs font-medium text-[#6c7b74]">
               <ShieldCheck className="size-4" /> Private by design
             </div>
           </div>
