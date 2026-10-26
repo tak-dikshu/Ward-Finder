@@ -111,7 +111,7 @@ function getSingleRelevanceScore(record: { name: string; relativeName: string | 
 
 /**
  * Calculates relevance score for dual searches (e.g. "Ramesh, Mukesh").
- * Records matching BOTH the Person Name and Relative Name receive high priority (2000+).
+ * Records matching BOTH the Person Name and Relative Name receive highest priority (2000+).
  */
 function getDualRelevanceScore(
   record: { name: string; relativeName: string | null },
@@ -160,12 +160,12 @@ function getDualRelevanceScore(
     return 2000 + nameScore + relScore
   }
 
-  // Partial match: only person name matched
+  // Partial match: person name matched
   if (nameScore > 0) {
     return nameScore
   }
 
-  // Fallback: only relative name matched
+  // Fallback: relative name matched
   if (relScore > 0) {
     return Math.floor(relScore / 2)
   }
@@ -241,7 +241,7 @@ export async function GET(request: Request) {
     relativeQuery = commaParts.slice(1).join(' ')
   }
 
-  // Generate transliteration variants for person name
+  // Generate transliteration variants for person name (Devanagari prioritized)
   const personVariants = getSearchVariants(personQuery)
   if (!personVariants.length) personVariants.push(personQuery)
 
@@ -272,7 +272,6 @@ export async function GET(request: Request) {
         return matchesPerson && matchesRelative
       })
 
-      // If strict dual match found 0, fallback to person matches
       if (filtered.length === 0) {
         filtered = sampleRecords.filter((record) => {
           if (targetWard && record.wardNumber !== targetWard) return false
@@ -342,26 +341,42 @@ export async function GET(request: Request) {
   }
 
   const recordsMap = new Map<string, SearchRecord>()
-  const authHeaders = {
+  const authHeaders: Record<string, string> = {
     apikey: key,
     Authorization: `Bearer ${key}`,
-    Prefer: 'count=exact',
   }
 
   try {
     if (isDualSearch) {
-      // 1. Try exact dual search: Person name matches AND Relative name matches
+      // 1. Primary dual search: Person name matches AND Relative name matches
+      // PostgREST naturally ANDs separate column query parameters: name=ilike.*X*&relative_name=ilike.*Y*
+      const personPrimary = personVariants[0]
+      const relPrimary = relativeVariants[0]
+      const escapedPerson = personPrimary.replace(/[\\%_*(),]/g, (char) => `\\${char}`)
+      const escapedRel = relPrimary.replace(/[\\%_*(),]/g, (char) => `\\${char}`)
+
       const dualUrl = new URL(baseUrl)
       dualUrl.searchParams.set('select', 'id,name,relative_name,ward_number,serial_number')
-      dualUrl.searchParams.set('and', `(or(${nameConditions.join(',')}),or(${relativeConditions.join(',')}))`)
+      dualUrl.searchParams.set('name', `ilike.*${escapedPerson}*`)
+      dualUrl.searchParams.set('relative_name', `ilike.*${escapedRel}*`)
       if (targetWard) dualUrl.searchParams.set('ward_number', `eq.${targetWard}`)
       dualUrl.searchParams.set('limit', '100')
 
-      const dualRes = await fetch(dualUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(6000) }).catch(() => null)
+      // 2. Person candidate search: in case relative name has variant spelling differences
+      const personUrl = new URL(baseUrl)
+      personUrl.searchParams.set('select', 'id,name,relative_name,ward_number,serial_number')
+      personUrl.searchParams.set('or', `(${nameConditions.join(',')})`)
+      if (targetWard) personUrl.searchParams.set('ward_number', `eq.${targetWard}`)
+      personUrl.searchParams.set('limit', '100')
+
+      const [dualRes, personRes] = await Promise.all([
+        fetch(dualUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(8000) }).catch(() => null),
+        fetch(personUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(8000) }).catch(() => null),
+      ])
 
       if (dualRes && dualRes.ok) {
         const rows = (await dualRes.json()) as Row[]
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           for (const row of rows) {
             recordsMap.set(row.id, {
               id: row.id,
@@ -374,28 +389,18 @@ export async function GET(request: Request) {
         }
       }
 
-      // 2. If dual query returned few or zero results, fetch person name candidates
-      if (recordsMap.size < 5) {
-        const fallbackNameUrl = new URL(baseUrl)
-        fallbackNameUrl.searchParams.set('select', 'id,name,relative_name,ward_number,serial_number')
-        fallbackNameUrl.searchParams.set('or', `(${nameConditions.join(',')})`)
-        if (targetWard) fallbackNameUrl.searchParams.set('ward_number', `eq.${targetWard}`)
-        fallbackNameUrl.searchParams.set('limit', '150')
-
-        const fallbackRes = await fetch(fallbackNameUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(6000) }).catch(() => null)
-        if (fallbackRes && fallbackRes.ok) {
-          const rows = (await fallbackRes.json()) as Row[]
-          if (Array.isArray(rows)) {
-            for (const row of rows) {
-              if (!recordsMap.has(row.id)) {
-                recordsMap.set(row.id, {
-                  id: row.id,
-                  name: row.name,
-                  relativeName: row.relative_name,
-                  wardNumber: row.ward_number,
-                  serialNumber: typeof row.serial_number === 'number' && Number.isInteger(row.serial_number) ? row.serial_number : null,
-                })
-              }
+      if (personRes && personRes.ok) {
+        const rows = (await personRes.json()) as Row[]
+        if (Array.isArray(rows)) {
+          for (const row of rows) {
+            if (!recordsMap.has(row.id)) {
+              recordsMap.set(row.id, {
+                id: row.id,
+                name: row.name,
+                relativeName: row.relative_name,
+                wardNumber: row.ward_number,
+                serialNumber: typeof row.serial_number === 'number' && Number.isInteger(row.serial_number) ? row.serial_number : null,
+              })
             }
           }
         }
@@ -415,8 +420,8 @@ export async function GET(request: Request) {
       relativeUrl.searchParams.set('limit', '150')
 
       const [nameRes, relativeRes] = await Promise.all([
-        fetch(nameUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(6000) }).catch(() => null),
-        fetch(relativeUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(6000) }).catch(() => null),
+        fetch(nameUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(8000) }).catch(() => null),
+        fetch(relativeUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(8000) }).catch(() => null),
       ])
 
       if (nameRes && nameRes.ok) {
@@ -450,30 +455,6 @@ export async function GET(request: Request) {
           }
         }
       }
-
-      // Combined fallback if needed
-      if (recordsMap.size === 0 && (!nameRes?.ok || !relativeRes?.ok)) {
-        const fallbackUrl = new URL(baseUrl)
-        fallbackUrl.searchParams.set('select', 'id,name,relative_name,ward_number,serial_number')
-        fallbackUrl.searchParams.set('or', `(${[...nameConditions, ...relativeConditions].join(',')})`)
-        if (targetWard) fallbackUrl.searchParams.set('ward_number', `eq.${targetWard}`)
-        fallbackUrl.searchParams.set('limit', '150')
-
-        const fallbackRes = await fetch(fallbackUrl, { headers: authHeaders, cache: 'no-store', signal: AbortSignal.timeout(6000) })
-        if (!fallbackRes.ok) return NextResponse.json({ error: 'Search unavailable.' }, { status: 502 })
-        const rows = (await fallbackRes.json()) as Row[]
-        if (Array.isArray(rows)) {
-          for (const row of rows) {
-            recordsMap.set(row.id, {
-              id: row.id,
-              name: row.name,
-              relativeName: row.relative_name,
-              wardNumber: row.ward_number,
-              serialNumber: typeof row.serial_number === 'number' && Number.isInteger(row.serial_number) ? row.serial_number : null,
-            })
-          }
-        }
-      }
     }
 
     const allRecords = Array.from(recordsMap.values())
@@ -495,4 +476,4 @@ export async function GET(request: Request) {
   } catch {
     return NextResponse.json({ error: 'Search unavailable.' }, { status: 502 })
   }
-    }
+}
