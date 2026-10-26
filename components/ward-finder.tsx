@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowRight, CheckCircle2, CircleHelp, Filter, Loader2, Search, ShieldCheck, X } from 'lucide-react'
+import { PWAInstallButton } from './pwa-install-button'
 
 type Result = {
   id: string
@@ -18,10 +19,15 @@ export function WardFinder() {
   const [selectedWard, setSelectedWard] = useState('all')
   const [availableWards, setAvailableWards] = useState<string[]>([])
   const [results, setResults] = useState<Result[]>([])
+  const [totalCount, setTotalCount] = useState<number | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [state, setState] = useState<SearchState>('idle')
   const [error, setError] = useState('')
   const requestId = useRef(0)
 
+  // Fetch published wards on mount to populate the dropdown without loading records
   useEffect(() => {
     fetch('/api/wards')
       .then((res) => (res.ok ? res.json() : { wards: [] }))
@@ -41,19 +47,22 @@ export function WardFinder() {
     const timer = window.setTimeout(async () => {
       const id = ++requestId.current
       setState('loading')
+      setCurrentPage(1)
       try {
         const timeoutId = window.setTimeout(() => controller.abort(), 8000)
         const wardParam = selectedWard !== 'all' ? `&ward=${encodeURIComponent(selectedWard)}` : ''
-        const response = await fetch(`/api/search?q=${encodeURIComponent(value)}${wardParam}`, {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(value)}${wardParam}&page=1`, {
           cache: 'no-store',
           signal: controller.signal,
         })
         window.clearTimeout(timeoutId)
         if (!response.ok) throw new Error('Search unavailable')
-        const data = (await response.json()) as { results?: Result[] }
+        const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean }
         if (id !== requestId.current) return
         const nextResults = data.results ?? []
         setResults(nextResults)
+        setTotalCount(typeof data.total === 'number' ? data.total : nextResults.length)
+        setHasMore(Boolean(data.hasMore))
         setState(nextResults.length ? 'success' : 'empty')
       } catch (err: unknown) {
         if (id !== requestId.current) return
@@ -69,9 +78,38 @@ export function WardFinder() {
     }
   }, [query, selectedWard])
 
+  async function loadMore() {
+    if (loadingMore || !hasMore || !query.trim()) return
+    const nextPage = currentPage + 1
+    setLoadingMore(true)
+    try {
+      const wardParam = selectedWard !== 'all' ? `&ward=${encodeURIComponent(selectedWard)}` : ''
+      const response = await fetch(
+        `/api/search?q=${encodeURIComponent(query.trim())}${wardParam}&page=${nextPage}`,
+        { cache: 'no-store' }
+      )
+      if (!response.ok) throw new Error('Failed to load more results')
+      const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean }
+      const newItems = data.results ?? []
+      setResults((prev) => [...prev, ...newItems])
+      setCurrentPage(nextPage)
+      setHasMore(Boolean(data.hasMore))
+      if (typeof data.total === 'number') {
+        setTotalCount(data.total)
+      }
+    } catch {
+      // Keep existing results intact if network drops temporarily
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   function resetSearch() {
     requestId.current++
     setResults([])
+    setTotalCount(null)
+    setCurrentPage(1)
+    setHasMore(false)
     setState('idle')
     setError('')
   }
@@ -96,8 +134,11 @@ export function WardFinder() {
             </div>
             <span className="text-sm font-bold tracking-[-0.02em]">Ward Finder</span>
           </div>
-          <div className="flex items-center gap-2 text-xs font-medium text-[#6c7b74]">
-            <ShieldCheck className="size-4" /> Private by design
+          <div className="flex items-center gap-3">
+            <PWAInstallButton />
+            <div className="hidden items-center gap-2 text-xs font-medium text-[#6c7b74] sm:flex">
+              <ShieldCheck className="size-4" /> Private by design
+            </div>
           </div>
         </header>
 
@@ -196,8 +237,10 @@ export function WardFinder() {
               <div>
                 <div className="mb-3 flex items-center justify-between">
                   <p className="text-sm font-semibold">
-                    {results.length} {results.length === 1 ? 'match' : 'matches'} found
-                    {selectedWard !== 'all' ? ` in Ward ${selectedWard}` : ''}
+                    {totalCount !== null && totalCount > results.length
+                      ? `Showing ${results.length} of ${totalCount} matches`
+                      : `${results.length} ${results.length === 1 ? 'match' : 'matches'} found`}
+                    {selectedWard !== 'all' ? ` in Ward ${selectedWard}` : ' across all wards'}
                   </p>
                   <CheckCircle2 className="size-4 text-[#809b15]" />
                 </div>
@@ -229,6 +272,43 @@ export function WardFinder() {
                     </article>
                   ))}
                 </div>
+
+                {/* Load More / Next Page Controls */}
+                {hasMore && (
+                  <div className="mt-5 flex flex-col items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={loadMore}
+                      disabled={loadingMore}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#d7ded5] bg-white px-5 py-3.5 text-sm font-semibold text-[#1d302b] shadow-xs transition hover:border-[#9aad38] hover:bg-[#f1f5ee] active:scale-[0.99] disabled:opacity-60"
+                    >
+                      {loadingMore ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin text-[#809b15]" />
+                          <span>Loading more results…</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Load Next Results</span>
+                          {totalCount !== null && (
+                            <span className="rounded-full bg-[#eef2ec] px-2 py-0.5 text-xs font-bold text-[#40523e]">
+                              +{Math.min(25, totalCount - results.length)} remaining
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </button>
+                    <p className="text-xs text-[#85918a]">
+                      Showing {results.length} of {totalCount ?? 'more'} records
+                    </p>
+                  </div>
+                )}
+
+                {!hasMore && results.length > 25 && (
+                  <div className="mt-5 text-center text-xs font-medium text-[#85918a]">
+                    All {results.length} matching records loaded
+                  </div>
+                )}
               </div>
             )}
           </div>
