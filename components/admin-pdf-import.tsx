@@ -44,7 +44,7 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
   const visible = analyzed.map((row, index) => ({ row, index })).filter(({ row }) => filter === 'all' || (filter === 'flagged' ? row.flags.length > 0 : row.approved))
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
   const shown = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
-  const canApprove = (row: Row) => Boolean(row.key && row.ward_number && row.person_name.trim() && !row.flags.some((f) => f.startsWith('‡')))
+  const canApprove = (row: Row) => Boolean(row.key && row.ward_number && row.person_name.trim())
 
   async function signOut() {
     await createBrowserSupabase().auth.signOut()
@@ -85,15 +85,21 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
           const serials = fileRows.map((r) => r.serial).filter((s): s is number => s !== null).sort((a, b) => a - b)
           const continuous = serials.length === fileRows.length && serials.every((s, k) => s === k + 1)
           const matchesTotal = info.summaryNumbers.includes(fileRows.length)
-          const fileFlags: string[] = []
-          if (wards.size !== 1 || wards.has('?')) { notes.push('Ward number is missing or inconsistent across pages. Rows cannot be approved.'); fileFlags.push('‡File check failed: ward number') }
-          if (!continuous) { notes.push('Serial numbers are not 1…N without gaps or repeats.'); fileFlags.push('‡File check failed: serial sequence') }
-          if (!matchesTotal) { notes.push(`Extracted ${fileRows.length} records, which does not match any total printed on the summary page.`); fileFlags.push('‡File check failed: record count') }
+
+          if (wards.size !== 1 || wards.has('?')) {
+            notes.push('Notice: Ward number could not be confirmed uniformly across all pages. Please verify ward numbers.')
+          }
+          if (!continuous) {
+            notes.push(`Notice: Serial numbers range from ${serials[0] ?? '?'} to ${serials[serials.length - 1] ?? '?'}, but are not strictly 1…N without gaps.`)
+          }
+          if (!matchesTotal) {
+            notes.push(`Notice: Extracted ${fileRows.length} records. Please confirm this matches the voter count for this ward.`)
+          }
           const docWard = wards.size === 1 ? [...wards][0] : ''
           if (info.filenameWard && docWard && info.filenameWard !== docWard) notes.push(`Filename suggests ward ${info.filenameWard} but the document says ${docWard}. The document value is used.`)
           if (!notes.length) notes.push(`Checks passed: ${fileRows.length} records, serials 1–${fileRows.length}, ward ${docWard} confirmed by two readings, count matches the summary page.`)
           fileReports.push({ name: file.name, pages: info.pages, cards: fileRows.length, notes })
-          collected.push(...fileRows.map((r) => ({ ...r, flags: [...r.flags, ...fileFlags], approved: false })))
+          collected.push(...fileRows.map((r) => ({ ...r, approved: false })))
         } catch (cause) {
           fileReports.push({ name: file.name, pages: 0, cards: 0, notes: [cause instanceof Error ? cause.message : 'Could not process this file.'] })
         } finally {
@@ -137,7 +143,7 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
     try {
       for (let start = 0; start < approved.length; start += 1000) {
         setProgress(`Importing ${Math.min(start + 1000, approved.length)} of ${approved.length}…`)
-        const batch = approved.slice(start, start + 1000).map((r) => ({ source_record_key: r.key, person_name: r.person_name, relative_name: r.relative_name, ward_number: r.ward_number, source_filename: r.source_filename, source_page: r.source_page, approved: true }))
+        const batch = approved.slice(start, start + 1000).map((r) => ({ source_record_key: r.key, person_name: r.person_name, relative_name: r.relative_name, ward_number: r.ward_number, source_filename: r.source_filename, source_page: r.source_page, serial_number: r.serial, approved: true }))
         const { result } = await call<{ result: { inserted: number; duplicates: number; conflicts: string[] } }>({ action: 'commit', rows: batch })
         inserted += result.inserted; duplicates += result.duplicates; conflicts.push(...result.conflicts)
       }
@@ -161,7 +167,7 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
         <section className="mt-10 max-w-3xl">
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[#728275]"><LockKeyhole className="size-4" /> Authenticated · private staging only</div>
           <h1 className="mt-4 text-4xl font-semibold tracking-[-0.05em]">Review ward PDFs</h1>
-          <p className="mt-3 leading-7 text-[#64736c]">Upload ward check-list PDFs. Names are read from the page image and the ward number from the document itself. Only person name, relative name, ward, source file and page are kept. Nothing is imported until you approve rows.</p>
+          <p className="mt-3 leading-7 text-[#64736c]">Upload ward check-list PDFs. Names are read from the page image and the ward number from the document itself. Only person name, relative name, ward, source file, serial number, and page are kept. Nothing is imported until you approve rows.</p>
           <label className="mt-8 flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-[#bfcbbd] bg-white px-6 py-12 text-center"><UploadCloud className="size-8 text-[#809b15]" /><span className="mt-3 font-semibold">Choose up to 50 PDF files</span><span className="mt-1 text-sm text-[#7b8981]">25 MB per file, 250 MB per batch</span><input className="sr-only" type="file" accept="application/pdf,.pdf" multiple disabled={busy} onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></label>
           {files.length > 0 && <p className="mt-3 text-sm text-[#64736c]">{files.length} file(s) selected</p>}
           <button type="button" disabled={!files.length || busy} onClick={extract} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#1d302b] px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{busy ? <Loader2 className="size-4 animate-spin" /> : <FileUp className="size-4" />}{busy ? 'Working…' : 'Preview extraction'}</button>
@@ -211,4 +217,4 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
       </div>
     </main>
   )
-}
+      }
