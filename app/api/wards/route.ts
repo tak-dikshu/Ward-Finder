@@ -16,13 +16,26 @@ export async function GET() {
   }
 
   try {
-    const wardsUrl = new URL(`${url.replace(/\/$/, '')}/rest/v1/ward_search`)
+    // 1. Queries the distinct wards view (returns only 21 unique rows, zero limits)
+    let wardsUrl = new URL(`${url.replace(/\/$/, '')}/rest/v1/ward_distinct_numbers`)
     wardsUrl.searchParams.set('select', 'ward_number')
 
-    const response = await fetch(wardsUrl, {
+    let response = await fetch(wardsUrl, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
       cache: 'no-store',
     })
+
+    // 2. Fallback to ward_search with 10k limit
+    if (!response.ok) {
+      wardsUrl = new URL(`${url.replace(/\/$/, '')}/rest/v1/ward_search`)
+      wardsUrl.searchParams.set('select', 'ward_number')
+      wardsUrl.searchParams.set('limit', '10000')
+
+      response = await fetch(wardsUrl, {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        cache: 'no-store',
+      })
+    }
 
     if (!response.ok) {
       return NextResponse.json({ wards: sampleWards }, { headers: { 'Cache-Control': 'no-store' } })
