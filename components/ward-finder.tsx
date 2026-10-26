@@ -49,8 +49,12 @@ export function WardFinder() {
       const id = ++requestId.current
       setState('loading')
       setCurrentPage(1)
+      let didTimeout = false
       try {
-        const timeoutId = window.setTimeout(() => controller.abort(), 8000)
+        const timeoutId = window.setTimeout(() => {
+          didTimeout = true
+          controller.abort()
+        }, 12000)
         const wardParam = selectedWard !== 'all' ? `&ward=${encodeURIComponent(selectedWard)}` : ''
         const response = await fetch(`/api/search?q=${encodeURIComponent(value)}${wardParam}&page=1`, {
           cache: 'no-store',
@@ -77,7 +81,12 @@ export function WardFinder() {
         setState(nextResults.length ? 'success' : 'empty')
       } catch (err: unknown) {
         if (id !== requestId.current) return
-        if (err instanceof DOMException && err.name === 'AbortError') return
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          if (!didTimeout) return
+          setState('error')
+          setError('Search took too long to respond. Please try again.')
+          return
+        }
         setState('error')
         setError('We could not complete that search. Please try again.')
       }
