@@ -37,29 +37,40 @@ export function WardFinder() {
     const value = query.trim()
     if (!value) return
 
+    const controller = new AbortController()
     const timer = window.setTimeout(async () => {
       const id = ++requestId.current
       setState('loading')
       try {
+        const timeoutId = window.setTimeout(() => controller.abort(), 8000)
         const wardParam = selectedWard !== 'all' ? `&ward=${encodeURIComponent(selectedWard)}` : ''
-        const response = await fetch(`/api/search?q=${encodeURIComponent(value)}${wardParam}`, { cache: 'no-store' })
+        const response = await fetch(`/api/search?q=${encodeURIComponent(value)}${wardParam}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+        window.clearTimeout(timeoutId)
         if (!response.ok) throw new Error('Search unavailable')
         const data = (await response.json()) as { results?: Result[] }
         if (id !== requestId.current) return
         const nextResults = data.results ?? []
         setResults(nextResults)
         setState(nextResults.length ? 'success' : 'empty')
-      } catch {
+      } catch (err: unknown) {
         if (id !== requestId.current) return
+        if (err instanceof DOMException && err.name === 'AbortError') return
         setState('error')
         setError('We could not complete that search. Please try again.')
       }
-    }, 350)
+    }, 300)
 
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
   }, [query, selectedWard])
 
   function resetSearch() {
+    requestId.current++
     setResults([])
     setState('idle')
     setError('')
