@@ -21,6 +21,7 @@ export function WardFinder() {
   const [totalCount, setTotalCount] = useState<number | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
+  const [isDualSearch, setIsDualSearch] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [isSampleMode, setIsSampleMode] = useState(false)
   const [state, setState] = useState<SearchState>('idle')
@@ -57,12 +58,19 @@ export function WardFinder() {
         })
         window.clearTimeout(timeoutId)
         if (!response.ok) throw new Error('Search unavailable')
-        const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean; sample?: boolean }
+        const data = (await response.json()) as {
+          results?: Result[]
+          total?: number
+          hasMore?: boolean
+          isDualSearch?: boolean
+          sample?: boolean
+        }
         if (id !== requestId.current) return
         const nextResults = data.results ?? []
         setResults(nextResults)
         setTotalCount(typeof data.total === 'number' ? data.total : nextResults.length)
         setHasMore(Boolean(data.hasMore))
+        setIsDualSearch(Boolean(data.isDualSearch))
         if (typeof data.sample === 'boolean') {
           setIsSampleMode(data.sample)
         }
@@ -92,11 +100,20 @@ export function WardFinder() {
         { cache: 'no-store' }
       )
       if (!response.ok) throw new Error('Failed to load more results')
-      const data = (await response.json()) as { results?: Result[]; total?: number; hasMore?: boolean; sample?: boolean }
+      const data = (await response.json()) as {
+        results?: Result[]
+        total?: number
+        hasMore?: boolean
+        isDualSearch?: boolean
+        sample?: boolean
+      }
       const newItems = data.results ?? []
       setResults((prev) => [...prev, ...newItems])
       setCurrentPage(nextPage)
       setHasMore(Boolean(data.hasMore))
+      if (typeof data.isDualSearch === 'boolean') {
+        setIsDualSearch(data.isDualSearch)
+      }
       if (typeof data.total === 'number') {
         setTotalCount(data.total)
       }
@@ -116,6 +133,7 @@ export function WardFinder() {
     setTotalCount(null)
     setCurrentPage(1)
     setHasMore(false)
+    setIsDualSearch(false)
     setIsSampleMode(false)
     setState('idle')
     setError('')
@@ -167,7 +185,7 @@ export function WardFinder() {
                     id="ward-search"
                     value={query}
                     onChange={(event) => updateQuery(event.target.value)}
-                    placeholder="Search name / नाम खोजें"
+                    placeholder="Search name or 'Name, Relative' (e.g. Ramesh, Mukesh)"
                     autoComplete="off"
                     className="min-w-0 flex-1 bg-transparent px-3 py-3 text-base outline-none placeholder:text-[#a5b0a9]"
                   />
@@ -210,7 +228,7 @@ export function WardFinder() {
               </div>
 
               <p className="flex items-center gap-2 text-xs text-[#85918a]">
-                <CircleHelp className="size-3.5" /> Try Hindi, English, or a Romanized spelling.
+                <CircleHelp className="size-3.5" /> Type single name (e.g. Ramesh) or dual &quot;Name, Relative&quot; (e.g. Ramesh, Mukesh / रमेश, मुकेश)
               </p>
             </div>
           </div>
@@ -218,7 +236,7 @@ export function WardFinder() {
           <div aria-live="polite" className="mt-12 max-w-2xl">
             {state === 'idle' && (
               <div className="rounded-2xl border border-dashed border-[#cbd5ca] px-5 py-6 text-sm text-[#7b8981]">
-                Enter a name above to see matching wards.
+                Enter a name above or type &quot;Name, Relative&quot; to see matching wards.
               </div>
             )}
             {state === 'loading' && (
@@ -235,19 +253,26 @@ export function WardFinder() {
               <div className="rounded-2xl border border-[#d7ded5] bg-white px-5 py-6">
                 <p className="font-semibold">No matching ward found</p>
                 <p className="mt-1 text-sm leading-6 text-[#728078]">
-                  Check the spelling or try the person&apos;s relative name. {selectedWard !== 'all' ? `Results are currently filtered to Ward ${selectedWard}.` : 'No ward is shown unless a reliable match exists.'}
+                  Check the spelling or try searching just the person&apos;s first name. {selectedWard !== 'all' ? `Results are currently filtered to Ward ${selectedWard}.` : 'No ward is shown unless a reliable match exists.'}
                 </p>
               </div>
             )}
             {state === 'success' && (
               <div>
-                <div className="mb-3 flex items-center justify-between">
-                  <p className="text-sm font-semibold">
-                    {totalCount !== null && totalCount > results.length
-                      ? `Showing ${results.length} of ${totalCount} matches`
-                      : `${results.length} ${results.length === 1 ? 'match' : 'matches'} found`}
-                    {selectedWard !== 'all' ? ` in Ward ${selectedWard}` : ' across all wards'}
-                  </p>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold">
+                      {totalCount !== null && totalCount > results.length
+                        ? `Showing ${results.length} of ${totalCount} matches`
+                        : `${results.length} ${results.length === 1 ? 'match' : 'matches'} found`}
+                      {selectedWard !== 'all' ? ` in Ward ${selectedWard}` : ' across all wards'}
+                    </p>
+                    {isDualSearch && (
+                      <span className="inline-flex items-center rounded-md bg-[#eef4d4] px-2 py-0.5 text-xs font-semibold text-[#5a6f0f]">
+                        Exact Name + Relative Match
+                      </span>
+                    )}
+                  </div>
                   <CheckCircle2 className="size-4 text-[#809b15]" />
                 </div>
                 <div className="flex flex-col gap-3">
@@ -327,4 +352,4 @@ export function WardFinder() {
       </div>
     </main>
   )
-      }
+}
