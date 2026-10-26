@@ -214,6 +214,9 @@ export function romanWordToDevanagari(word: string): string[] {
   if (!w) return []
 
   const directMatches = COMMON_NAME_MAP.get(w) ?? []
+  if (directMatches.length > 0) {
+    return directMatches
+  }
 
   type State = { hindi: string; index: number; hadConsonant: boolean }
   let states: State[] = [{ hindi: '', index: 0, hadConsonant: false }]
@@ -454,6 +457,7 @@ export function devanagariToRoman(text: string): string[] {
       const next = chars[i + 1]
 
       if (c === '्') {
+        // Halant cancels preceding schwa
         continue
       }
 
@@ -463,25 +467,31 @@ export function devanagariToRoman(text: string): string[] {
         continue
       }
 
+      // If it's a matra
       if (MATRA_CHARS.has(c)) {
         roman += mapped
         continue
       }
 
+      // If it's an independent vowel or modifier
       if ('अआइईउऊऋएऐओऔंः'.includes(c)) {
         roman += mapped
         continue
       }
 
+      // It's a consonant
       roman += mapped
 
+      // Inherent schwa handling
       if (!next || next === ' ') {
-        // Final consonant: schwa omitted in modern Hindi
+        // Final consonant in modern Hindi typically has schwa deleted
+        // (e.g. मुकेश -> mukesh, not mukesha)
       } else if (next === '्') {
-        // Halant
+        // Halant follows: no vowel
       } else if (MATRA_CHARS.has(next)) {
-        // Matra follows
+        // Matra follows: matra will provide the vowel sound
       } else {
+        // Another consonant follows: add inherent 'a'
         roman += 'a'
       }
     }
@@ -492,6 +502,7 @@ export function devanagariToRoman(text: string): string[] {
   const primary = romanWords.join(' ')
   if (!primary) return []
 
+  // Add simplified alternate (e.g., 'ee' -> 'i', 'oo' -> 'u')
   const simplified = primary.replace(/ee/g, 'i').replace(/oo/g, 'u').replace(/aa/g, 'a')
   return Array.from(new Set([primary, simplified]))
 }
@@ -514,13 +525,17 @@ export function getSearchVariants(query: string): string[] {
       if (v) variants.add(v)
     })
   } else {
-    const norm = normalizeRoman(raw)
-    if (norm) variants.add(norm)
+    // For English/Roman input:
+    // Electoral rolls are predominantly in Devanagari (Hindi).
+    // Therefore, Devanagari transliteration MUST be the primary variant!
     const devanagariVariants = romanToDevanagari(raw)
     devanagariVariants.forEach((v) => {
       if (v) variants.add(v)
     })
+    const norm = normalizeRoman(raw)
+    if (norm) variants.add(norm)
   }
 
-  return Array.from(variants).filter((v) => v.length > 0).slice(0, 6)
-                }
+  // Cap at top 3 high-probability variants to keep database query execution fast (<1s)
+  return Array.from(variants).filter((v) => v.length > 0).slice(0, 3)
+              }
