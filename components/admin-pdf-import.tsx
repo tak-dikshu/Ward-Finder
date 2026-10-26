@@ -133,6 +133,14 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
     setRows((current) => analyzeRows(current).map((row, i) => ({ ...current[i], approved: current[i].approved || (row.flags.length === 0 && canApprove(current[i])) })))
   }
 
+  function approveAll() {
+    setRows((current) => current.map((row) => ({ ...row, approved: canApprove(row) })))
+  }
+
+  function unapproveAll() {
+    setRows((current) => current.map((row) => ({ ...row, approved: false })))
+  }
+
   async function importApproved() {
     const approved = analyzed.filter((r) => r.approved)
     if (!approved.length) return
@@ -186,7 +194,9 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
               <p className="text-sm text-[#64736c]">{rows.length} records · {flaggedCount} flagged · <strong>{approvedCount} approved</strong></p>
               <div className="flex flex-wrap gap-2 text-sm">
                 {(['flagged', 'all', 'approved'] as Filter[]).map((f) => <button key={f} type="button" onClick={() => { setFilter(f); setPage(0) }} className={`rounded-lg border px-3 py-1.5 ${filter === f ? 'border-[#1d302b] bg-[#1d302b] text-white' : 'border-[#d7ded5]'}`}>{f}</button>)}
-                <button type="button" onClick={approveUnflagged} className="rounded-lg border border-[#d7ded5] px-3 py-1.5">Approve all unflagged</button>
+                <button type="button" onClick={approveUnflagged} className="rounded-lg border border-[#d7ded5] px-3 py-1.5 hover:bg-[#f7f8f4]">Approve all unflagged</button>
+                <button type="button" onClick={approveAll} className="rounded-lg border border-[#809b15] bg-[#d9f04d] px-3 py-1.5 font-bold text-[#1d302b] shadow-xs hover:bg-[#cfe0b8]">Approve all ({rows.length})</button>
+                {approvedCount > 0 && <button type="button" onClick={unapproveAll} className="rounded-lg border border-[#d7ded5] px-3 py-1.5 text-[#728275] hover:bg-[#f7f8f4]">Reset</button>}
               </div>
             </div>
             <p className="mt-3 rounded-xl bg-[#f7f8f4] p-3 text-xs text-[#64736c]">Compare each row with the original PDF page before approving. Flagged rows are never approved automatically; fix the text if needed, then tick the box yourself.</p>
@@ -217,4 +227,4 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
       </div>
     </main>
   )
-      }
+                  }
