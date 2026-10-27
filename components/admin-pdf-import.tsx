@@ -292,4 +292,32 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
                       <td className="p-2 tabular-nums">
                         <input
                           value={row.ward_number}
+                          placeholder="—"
+                          onChange={(e) => updateRow(index, { ward_number: e.target.value })}
+                          className="w-14 rounded-lg border border-[#e1e7df] px-1.5 py-1 text-center font-bold text-sm"
+                        />
+                      </td>
+                      <td className="p-2 whitespace-nowrap">{row.source_page}</td>
+                      <td className="p-2 text-xs text-[#9b4b4b]">{row.flags.map((f) => f.replace(/^[§‡]/, '')).join('; ')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm">
+                <button type="button" disabled={page === 0} onClick={() => setPage(page - 1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Prev</button>
+                <span>{page + 1} / {pageCount}</span>
+                <button type="button" disabled={page + 1 >= pageCount} onClick={() => setPage(page + 1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Next</button>
+              </div>
+              <button type="button" disabled={!approvedCount || busy} onClick={importApproved} className="rounded-xl bg-[#1d302b] px-5 py-3 font-semibold text-white disabled:opacity-50">
+                Import {approvedCount} approved to private staging
+              </button>
+            </div>
+          </section>
+        )}
+      </div>
+    </main>
+  )
+}
                        
