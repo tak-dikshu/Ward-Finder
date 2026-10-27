@@ -123,7 +123,7 @@ export function validateCommitRow(row: unknown): string[] {
 }
 
 export function wardFromFilename(filename: string): string | null {
-  const m = filename.match(/ward[\s_-]*no[\s_-]*0*([0-9]{1,3})/i)
+  const m = filename.match(/ward[\s_.-]*(?:no[\s_.-]*)?0*([0-9]{1,3})/i)
   return m ? m[1] : null
 }
 
