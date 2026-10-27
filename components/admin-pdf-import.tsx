@@ -34,6 +34,7 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
   const [filter, setFilter] = useState<Filter>('flagged')
   const [page, setPage] = useState(0)
   const [importResult, setImportResult] = useState('')
+  const [batchWard, setBatchWard] = useState('')
 
   const analyzed = useMemo(() => {
     const flagged = analyzeRows(rows)
@@ -41,6 +42,7 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
   }, [rows])
   const approvedCount = analyzed.filter((r) => r.approved).length
   const flaggedCount = analyzed.filter((r) => r.flags.length).length
+  const missingWardCount = rows.filter((r) => !r.ward_number.trim()).length
   const visible = analyzed.map((row, index) => ({ row, index })).filter(({ row }) => filter === 'all' || (filter === 'flagged' ? row.flags.length > 0 : row.approved))
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
   const shown = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
@@ -79,15 +81,29 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
             const chunk = await call<{ results: PageResult[] }>({ action: 'extract', path: upload.path, filename: file.name, pages })
             results.push(...chunk.results)
           }
-          const fileRows = results.flatMap((r) => r.rows)
+          let fileRows = results.flatMap((r) => r.rows)
           const cardPages = results.filter((r) => r.cards > 0)
-          const wards = new Set(cardPages.map((r) => (r.wardText && r.wardOcr && r.wardText === r.wardOcr ? r.wardText : '?')))
+          let wards = new Set(cardPages.map((r) => (r.wardText && r.wardOcr && r.wardText === r.wardOcr ? r.wardText : '?')))
           const serials = fileRows.map((r) => r.serial).filter((s): s is number => s !== null).sort((a, b) => a - b)
           const continuous = serials.length === fileRows.length && serials.every((s, k) => s === k + 1)
           const matchesTotal = info.summaryNumbers.includes(fileRows.length)
 
-          if (wards.size !== 1 || wards.has('?')) {
-            notes.push('Notice: Ward number could not be confirmed uniformly across all pages. Please verify ward numbers.')
+          if ((wards.size !== 1 || wards.has('?')) && info.filenameWard) {
+            fileRows = fileRows.map((r) => {
+              if (!r.ward_number) {
+                return {
+                  ...r,
+                  ward_number: info.filenameWard!,
+                  flags: r.flags.filter((f) => !f.includes('Ward number uncertain')),
+                }
+              }
+              return r
+            })
+            wards = new Set([info.filenameWard])
+            notes.push(`Ward number ${info.filenameWard} automatically applied from filename (${file.name}).`)
+            setBatchWard(info.filenameWard)
+          } else if (wards.size !== 1 || wards.has('?')) {
+            notes.push('Notice: Ward number could not be confirmed uniformly across all pages. Please verify or set ward numbers.')
           }
           if (!continuous) {
             notes.push(`Notice: Serial numbers range from ${serials[0] ?? '?'} to ${serials[serials.length - 1] ?? '?'}, but are not strictly 1…N without gaps.`)
@@ -115,10 +131,17 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
     }
   }
 
-  function updateRow(index: number, patch: Partial<Pick<Row, 'person_name' | 'relative_name' | 'approved'>>) {
+  function updateRow(index: number, patch: Partial<Pick<Row, 'person_name' | 'relative_name' | 'approved' | 'ward_number'>>) {
     setRows((current) => current.map((row, i) => {
       if (i !== index) return row
       const next = { ...row, ...patch }
+      if ('ward_number' in patch) {
+        if (next.ward_number.trim()) {
+          next.flags = next.flags.filter((flag) => !flag.includes('Ward number uncertain'))
+        } else if (!next.flags.some((f) => f.includes('Ward number uncertain'))) {
+          next.flags.push('Ward number uncertain (header OCR and PDF digits disagree or are missing)')
+        }
+      }
       if ('person_name' in patch || 'relative_name' in patch) {
         const kept = next.flags.filter((flag) => !NAME_FLAG.test(flag))
         next.flags = [...nameFlags(next.person_name.trim(), 'person name'), ...(next.relative_name.trim() ? nameFlags(next.relative_name.trim(), 'relative name') : ['Missing relative name']), ...kept]
@@ -126,6 +149,19 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
       }
       if (next.approved && !canApprove(next)) next.approved = false
       return next
+    }))
+  }
+
+  function applyBatchWard(targetWard?: string) {
+    const target = (targetWard ?? batchWard).trim()
+    if (!target || !/^[1-9][0-9]{0,2}$/.test(target)) {
+      setError('Please enter a valid ward number (1-999).')
+      return
+    }
+    setError('')
+    setRows((current) => current.map((row) => {
+      const flags = row.flags.filter((f) => !f.includes('Ward number uncertain'))
+      return { ...row, ward_number: target, flags }
     }))
   }
 
@@ -175,7 +211,7 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
         <section className="mt-10 max-w-3xl">
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[#728275]"><LockKeyhole className="size-4" /> Authenticated · private staging only</div>
           <h1 className="mt-4 text-4xl font-semibold tracking-[-0.05em]">Review ward PDFs</h1>
-          <p className="mt-3 leading-7 text-[#64736c]">Upload ward check-list PDFs. Names are read from the page image and the ward number from the document itself. Only person name, relative name, ward, source file, serial number, and page are kept. Nothing is imported until you approve rows.</p>
+          <p className="mt-3 leading-7 text-[#64736c]">Upload ward check-list PDFs. Names are read from the page image and the ward number from the document itself. Only person name, relative name, ward, source file and page are kept. Nothing is imported until you approve rows.</p>
           <label className="mt-8 flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-[#bfcbbd] bg-white px-6 py-12 text-center"><UploadCloud className="size-8 text-[#809b15]" /><span className="mt-3 font-semibold">Choose up to 50 PDF files</span><span className="mt-1 text-sm text-[#7b8981]">25 MB per file, 250 MB per batch</span><input className="sr-only" type="file" accept="application/pdf,.pdf" multiple disabled={busy} onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></label>
           {files.length > 0 && <p className="mt-3 text-sm text-[#64736c]">{files.length} file(s) selected</p>}
           <button type="button" disabled={!files.length || busy} onClick={extract} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#1d302b] px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{busy ? <Loader2 className="size-4 animate-spin" /> : <FileUp className="size-4" />}{busy ? 'Working…' : 'Preview extraction'}</button>
@@ -192,13 +228,56 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
           <section className="mt-8 rounded-2xl border border-[#d7ded5] bg-white p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-[#64736c]">{rows.length} records · {flaggedCount} flagged · <strong>{approvedCount} approved</strong></p>
-              <div className="flex flex-wrap gap-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
                 {(['flagged', 'all', 'approved'] as Filter[]).map((f) => <button key={f} type="button" onClick={() => { setFilter(f); setPage(0) }} className={`rounded-lg border px-3 py-1.5 ${filter === f ? 'border-[#1d302b] bg-[#1d302b] text-white' : 'border-[#d7ded5]'}`}>{f}</button>)}
                 <button type="button" onClick={approveUnflagged} className="rounded-lg border border-[#d7ded5] px-3 py-1.5 hover:bg-[#f7f8f4]">Approve all unflagged</button>
                 <button type="button" onClick={approveAll} className="rounded-lg border border-[#809b15] bg-[#d9f04d] px-3 py-1.5 font-bold text-[#1d302b] shadow-xs hover:bg-[#cfe0b8]">Approve all ({rows.length})</button>
                 {approvedCount > 0 && <button type="button" onClick={unapproveAll} className="rounded-lg border border-[#d7ded5] px-3 py-1.5 text-[#728275] hover:bg-[#f7f8f4]">Reset</button>}
+                <div className="flex items-center gap-1.5 border-l border-[#d7ded5] pl-2">
+                  <span className="text-xs font-semibold text-[#728275]">Ward:</span>
+                  <input
+                    type="text"
+                    placeholder="7"
+                    value={batchWard}
+                    onChange={(e) => setBatchWard(e.target.value)}
+                    className="w-14 rounded-lg border border-[#d7ded5] bg-white px-2 py-1 text-center font-bold text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => applyBatchWard()}
+                    className="rounded-lg border border-[#d7ded5] bg-[#f7f8f4] px-2.5 py-1 text-xs font-semibold hover:bg-white"
+                  >
+                    Apply to all
+                  </button>
+                </div>
               </div>
             </div>
+
+            {missingWardCount > 0 && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#f3d288] bg-[#fffbf0] p-4 text-sm text-[#875a0e]">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="size-5 shrink-0 text-[#c27803]" />
+                  <span><strong>{missingWardCount} records</strong> have no ward number (uncertain from PDF header). Assign ward number to enable approval:</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. 7"
+                    value={batchWard}
+                    onChange={(e) => setBatchWard(e.target.value)}
+                    className="w-20 rounded-lg border border-[#d6a543] bg-white px-2.5 py-1.5 text-center font-bold text-[#1d302b]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => applyBatchWard()}
+                    className="rounded-lg bg-[#c27803] px-3.5 py-1.5 font-semibold text-white shadow-xs hover:bg-[#a56600]"
+                  >
+                    Assign Ward {batchWard || '...'} to all {rows.length} rows
+                  </button>
+                </div>
+              </div>
+            )}
+
             <p className="mt-3 rounded-xl bg-[#f7f8f4] p-3 text-xs text-[#64736c]">Compare each row with the original PDF page before approving. Flagged rows are never approved automatically; fix the text if needed, then tick the box yourself.</p>
             <div className="mt-4 overflow-x-auto">
               <table className="w-full min-w-[820px] text-left text-sm">
@@ -210,21 +289,7 @@ export function AdminPdfImport({ adminEmail }: { adminEmail: string }) {
                       <td className="p-2 tabular-nums">{row.serial ?? '—'}</td>
                       <td className="p-2"><input value={row.person_name} onChange={(e) => updateRow(index, { person_name: e.target.value })} className="w-full rounded-lg border border-[#e1e7df] px-2 py-1" /></td>
                       <td className="p-2"><input value={row.relative_name} onChange={(e) => updateRow(index, { relative_name: e.target.value })} className="w-full rounded-lg border border-[#e1e7df] px-2 py-1" /></td>
-                      <td className="p-2 tabular-nums">{row.ward_number || '—'}</td>
-                      <td className="p-2 whitespace-nowrap">{row.source_page}</td>
-                      <td className="p-2 text-xs text-[#9b4b4b]">{row.flags.map((f) => f.replace(/^[§‡]/, '')).join('; ')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-sm"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Prev</button><span>{page + 1} / {pageCount}</span><button type="button" disabled={page + 1 >= pageCount} onClick={() => setPage(page + 1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Next</button></div>
-              <button type="button" disabled={!approvedCount || busy} onClick={importApproved} className="rounded-xl bg-[#1d302b] px-5 py-3 font-semibold text-white disabled:opacity-50">Import {approvedCount} approved to private staging</button>
-            </div>
-          </section>
-        )}
-      </div>
-    </main>
-  )
-                  }
+                      <td className="p-2 tabular-nums">
+                        <input
+                          value={row.ward_number}
+                       
