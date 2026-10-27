@@ -118,8 +118,29 @@ export async function extractPages(buffer: Uint8Array, filename: string, hash12:
     for (const pageNumber of pageNumbers) {
       if (pageNumber < 1 || pageNumber > total) continue
       const page = doc.loadPage(pageNumber - 1)
-      const lines = linesOf(page)
-      const anchors = lines.filter((l) => ID_RE.test(l.t.trim()))
+      const lines: Line[] = linesOf(page)
+      const anchors: Array<{ x: number; y: number; serial: number | null }> = []
+
+      // 1. Standard cards with EPIC IDs (e.g. IXI1234567, RJ/14/...)
+      for (const l of lines) {
+        if (!ID_RE.test(l.t.trim())) continue
+        const serialLine = lines.find((s) => /^\s*\d{1,5}\s*$/.test(s.t) && s.x >= l.x - 35 && s.x <= l.x - 2 && Math.abs(s.y - (l.y + 1)) < 7)
+        anchors.push({ x: l.x, y: l.y, serial: serialLine ? Number(serialLine.t.trim()) : null })
+      }
+
+      // 2. Supplementary addition cards (परिवर्धन सूची) without EPIC IDs
+      for (const l of lines) {
+        if (!/^\s*\d{1,5}\s*$/.test(l.t)) continue
+        const val = Number(l.t.trim())
+        if (val < 1 || val > 10000) continue
+        const nearExisting = anchors.some((a) => Math.abs(a.y - l.y) < 7 && l.x >= a.x - 35 && l.x <= a.x - 2)
+        if (nearExisting) continue
+        const hasNameBelow = lines.some((nl) => /[नना]र?म\s*:/.test(nl.t) && Math.abs(nl.x - (l.x - 16)) < 25 && nl.y - l.y >= 8 && nl.y - l.y <= 20)
+        if (hasNameBelow) {
+          anchors.push({ x: l.x + 31, y: l.y - 1, serial: val })
+        }
+      }
+
       const wardLineObj = lines.find((l) => /कमरपक\s*:\s*\d{1,3}\s*$/.test(l.t))
       const wardMatch = wardLineObj ? wardLineObj.t.match(/(\d{1,3})\s*$/) : null
       const wardText = wardMatch ? wardMatch[1] : null
@@ -139,8 +160,7 @@ export async function extractPages(buffer: Uint8Array, filename: string, hash12:
         const inColumn = (l: Line) => l.x >= left - 2 && l.x < right && !l.t.includes(':') && l.t.trim() !== '' && !/^\s*\d+\s*$/.test(l.t)
         const nameBox = union(lines.filter((l) => inColumn(l) && l.y >= a.y + 10 && l.y <= a.y + 19))
         const relBox = union(lines.filter((l) => inColumn(l) && l.y >= a.y + 23 && l.y <= a.y + 32))
-        const serialLine = lines.find((l) => /^\s*\d{1,5}\s*$/.test(l.t) && l.x >= a.x - 32 && l.x <= a.x - 2 && Math.abs(l.y - (a.y + 1)) < 7)
-        const serial = serialLine ? Number(serialLine.t.trim()) : null
+        const serial = a.serial
         const person = textFromBox(data.words, nameBox)
         const relative = textFromBox(data.words, relBox)
         const flags = [...nameFlags(person.text, 'person name'), ...(relative.text ? nameFlags(relative.text, 'relative name') : ['Missing relative name'])]
@@ -157,4 +177,4 @@ export async function extractPages(buffer: Uint8Array, filename: string, hash12:
     await digitWorker.terminate()
   }
   return results
-}
+    }
