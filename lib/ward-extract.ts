@@ -119,11 +119,14 @@ export async function extractPages(buffer: Uint8Array, filename: string, hash12:
       if (pageNumber < 1 || pageNumber > total) continue
       const page = doc.loadPage(pageNumber - 1)
       const lines: Line[] = linesOf(page)
+      // Deletion or modification section heading: "घटक 2: विलोपन सूची" or "घटक 3: संशोधन सूची"
+      const deletionHeader = lines.find((l) => /घटक\s*[23]/i.test(l.t))
       const anchors: Array<{ x: number; y: number; serial: number | null }> = []
 
       // 1. Standard cards with EPIC IDs (e.g. IXI1234567, RJ/14/...)
       for (const l of lines) {
         if (!ID_RE.test(l.t.trim())) continue
+        if (deletionHeader && l.y >= deletionHeader.y - 12) continue
         const serialLine = lines.find((s) => /^\s*\d{1,5}\s*$/.test(s.t) && s.x >= l.x - 35 && s.x <= l.x - 2 && Math.abs(s.y - (l.y + 1)) < 7)
         anchors.push({ x: l.x, y: l.y, serial: serialLine ? Number(serialLine.t.trim()) : null })
       }
@@ -131,6 +134,7 @@ export async function extractPages(buffer: Uint8Array, filename: string, hash12:
       // 2. Supplementary addition cards (परिवर्धन सूची) without EPIC IDs
       for (const l of lines) {
         if (!/^\s*\d{1,5}\s*$/.test(l.t)) continue
+        if (deletionHeader && l.y >= deletionHeader.y - 12) continue
         const val = Number(l.t.trim())
         if (val < 1 || val > 10000) continue
         const nearExisting = anchors.some((a) => Math.abs(a.y - l.y) < 7 && l.x >= a.x - 35 && l.x <= a.x - 2)
@@ -151,7 +155,10 @@ export async function extractPages(buffer: Uint8Array, filename: string, hash12:
       const { data } = await worker.recognize(png)
       const ocrMs = Date.now() - started
       const wardOcr = await ocrWardDigits(digitWorker, png, wardLineObj)
-      const ward = wardText && wardOcr && wardText === wardOcr ? wardText : ''
+      const { wardFromFilename } = await import('./ward-import-core')
+      const fileWard = wardFromFilename(filename)
+      const wardExact = wardText && wardOcr && wardText === wardOcr
+      const ward = wardExact ? wardText : (wardText || fileWard || '')
 
       const rows: PreviewRow[] = []
       for (const a of anchors) {
@@ -163,11 +170,14 @@ export async function extractPages(buffer: Uint8Array, filename: string, hash12:
         const serial = a.serial
         const person = textFromBox(data.words, nameBox)
         const relative = textFromBox(data.words, relBox)
+        // If box is completely empty and serial is null, skip it
+        if (serial === null && !person.text.trim()) continue
+
         const flags = [...nameFlags(person.text, 'person name'), ...(relative.text ? nameFlags(relative.text, 'relative name') : ['Missing relative name'])]
         const confidence = Math.round(Math.min(person.confidence || 0, relative.confidence || person.confidence || 0))
         if (confidence < LOW_CONFIDENCE) flags.push(`Low OCR confidence (${confidence})`)
         if (serial === null) flags.push('Missing serial number')
-        if (!ward) flags.push('Ward number uncertain (header OCR and PDF digits disagree or are missing)')
+        if (!wardExact) flags.push('Ward number uncertain (header OCR and PDF digits disagree or are missing)')
         rows.push({ key: serial === null ? '' : recordKey(hash12, serial), serial, person_name: person.text, relative_name: relative.text, ward_number: ward, source_filename: path.basename(filename), source_page: pageNumber, confidence, flags })
       }
       results.push({ page: pageNumber, cards: anchors.length, wardText, wardOcr, rows, ocrMs })
